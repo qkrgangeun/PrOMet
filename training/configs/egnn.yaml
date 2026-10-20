@@ -1,0 +1,54 @@
+# EGNN training configuration of the released model (run "0602_distributed_cefocus_posweight2").
+# Paths are placeholders; see training/README.md for how to produce the inputs.
+seed_everything: 42
+trainer:
+  accelerator: auto
+  strategy: ddp_find_unused_parameters_true
+  devices: auto
+  precision: 32-true
+  max_epochs: 50
+  callbacks:
+  - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+    init_args:
+      dirpath: checkpoints
+      monitor: val_loss
+      mode: min
+      save_top_k: 1
+      save_last: true
+model:
+  model: promet.model.Model
+  model_config:
+    encoder_args:
+      input_dim: 230
+      hidden_dim: 64
+      dropout_rate: 0.1
+      output_dim: 32
+      egnn_args:
+        input_dim: 32
+        hidden_dim: 64
+        num_layers: 5
+        edge_feat_dim: 0
+        output_dim: 32
+        dropout_rate: 0.1
+    decoder_args:
+      use_attention_prob: false
+      use_attention_type: false
+      binning_layer_args: {input_dim: 32, output_dim: 3, num_layers: 3, dropout_rate: 0.5}
+      prob_transform_args:
+        attention: {input_dim: 16, embed_dim: 64, output_dim: 1, num_heads: 8, dropout_rate: 0.1, num_layers: 1}
+        linear: {input_dim: 32, output_dim: 1, num_layers: 5, dropout_rate: 0.1}
+      type_transform_args:
+        attention: {input_dim: 32, embed_dim: 64, output_dim: 11, num_heads: 8, dropout_rate: 0.1, num_layers: 1}
+        linear: {input_dim: 32, output_dim: 11, num_layers: 5, dropout_rate: 0.1}
+data:
+  train_data_file: data/splits/train.txt
+  val_data_file: data/splits/validation.txt
+  preprocessed:
+    features_dir: work/features        # <pdb_id>.npz from training/make_features.py
+    rf_result_dir: work/rf_probs       # <pdb_id>.npz from training/rf.py predict
+    topk: 16
+    edge_dist_cutoff: 15
+    pocket_dist: 3
+    rf_threshold: 0.5
+  train_loader_params: {batch_size: 1, num_workers: 2, pin_memory: true}
+  val_loader_params: {batch_size: 1, num_workers: 2, pin_memory: true}

@@ -3,10 +3,28 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ligmet"
-version = "0.1.0.dev0"
+name = "promet"
+version = "1.0.0"
+description = "PrOMet: structure-based prediction of protein metal-binding sites and metal types"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.9,<3.10"
+# torch / dgl / openbabel / dssp are installed via conda (environment.yml)
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "scikit-learn==1.4.2",
+    "imbalanced-learn==0.12.3",
+    "joblib",
+    "biopython",
+    "freesasa",
+]
+
+[project.scripts]
+promet = "promet.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+promet = ["params/*.pt"]
