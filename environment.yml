@@ -5,26 +5,22 @@ channels:
   - conda-forge
 dependencies:
   - python=3.9
-  - pytorch=1.11
-  - dgl-cuda11.3=0.9.1
-  - e3nn=0.5
+  - pytorch=1.11.0
   - cudatoolkit=11.3
-  - cudatoolkit-dev=11.3
+  - dgl-cuda11.3=0.9.1post1
   - mkl<2024.1
-  - rdkit=2023.9
-  - numpy
-  - scipy
-  - scikit-learn
-  - pandas
-  - matplotlib
-  - seaborn
-  - networkx
-  - biopython
-  - jupyter
-  - joblib
-  - wandb
+  # the Random Forest parameters were pickled with these versions
+  - scikit-learn=1.4.2
+  - imbalanced-learn=0.12.3
+  - joblib=1.4.2
+  - numpy=1.26.4
+  - scipy=1.13.0
+  - pandas=2.2.2
+  - biopython=1.83
+  - freesasa=2.2.1
+  - openbabel=3.1.1
+  - dssp=3.1.4
+  - tqdm
   - pip
-  - pip:
-    - freesasa
-    - imblearn
-    - pytorch-lightning
+  # training only
+  - lightning=2.0.9

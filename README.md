@@ -1,251 +1,127 @@
-# LigMet: Ligand-Protein Binding Prediction
+# PrOMet
 
-LigMet is a machine learning framework for ligand-protein binding prediction using deep learning and traditional ML approaches.
+**PrOMet** (**Pr**une-and-**O**ptimize **Met**al predictor) predicts metal-binding sites and their metal types from a protein structure.
 
-## Features
+> G. Park, C. Seok, H. Park. *PrOMet: Accurate and Robust Metal-binding Site and Type Prediction.* (manuscript under review)
 
-- **Multiple Model Architectures**: Deep Learning (DL) and Random Forest implementations
-- **PyTorch Lightning Integration**: Streamlined training and evaluation pipeline
-- **Flexible Dataset Support**: Built-in dataset and featurizer modules
-- **Parameter Management**: Pre-trained parameters available via Hugging Face
+PrOMet works in two stages:
+
+1. **Prune.** Candidate points are sampled on the protein surface. A Balanced Random Forest scores each point from hand-crafted descriptors, such as coordinating atoms in the first and second shell, solvent exposure and backbone geometry. Points scoring below 0.5 are removed, which is about 97% of the candidates.
+2. **Optimize.** The remaining points and the protein/ligand atoms are joined into one k-NN graph (k = 16). An E(3)-equivariant GNN (EGNN) predicts a metal occupancy probability and a metal type for every point. High-probability points are grouped into sites with DBSCAN (eps = 2 Å, min_samples = 2).
+
+PrOMet uses bound ligands and cofactors (HETATM records) as part of the binding environment. It predicts 10 metal types: Mg, Zn, Mn, Ca, Fe, Ni, Co, Cu, K and Na.
 
 ## Installation
 
-### Prerequisites
-
-- Python 3.9 or higher
-- CUDA 11.3 (for GPU support)
-- Conda package manager
-
-### Step 1: Clone the Repository
+PrOMet needs Linux and conda. A CUDA GPU is optional; the EGNN step also runs fast on CPU.
 
 ```bash
-git clone https://github.com/momil/LigMet.git
-cd LigMet/code
-```
-
-### Step 2: Create and Activate Conda Environment
-
-```bash
-conda env create -f environment.yml
+git clone https://github.com/qkrgangeun/PrOMet.git
+cd PrOMet
+conda env create -f environment.yml      # creates the `promet` environment
 conda activate promet
-```
-
-This creates a `promet` environment with all required dependencies including:
-- PyTorch 1.11
-- DGL (Deep Graph Library) with CUDA 11.3 support
-- RDKit for molecular processing
-- PyTorch Lightning for training
-- And more scientific computing libraries
-
-### Step 3: Install LigMet Package
-
-```bash
 pip install -e .
 ```
 
-### Step 4: Download Pre-trained Parameters (Optional)
-
-Pre-trained model parameters are hosted on Hugging Face:
+Download the Random Forest parameters (about 1.8 GB). They are hosted as a GitHub release asset, and the download is checked against a SHA-256 checksum:
 
 ```bash
-# Using huggingface-hub CLI
-huggingface-cli download momil/PrOMet param --repo-type model --local-dir ./param
-
-# Or using Python
-from huggingface_hub import snapshot_download
-snapshot_download(repo_id="momil/PrOMet", repo_type="model", local_dir="./param")
+promet download-weights                  # saves to ~/.cache/promet/promet_rf.joblib
 ```
 
-The `param` folder contains:
-- `dl.ckpt`: Pre-trained deep learning model checkpoint
-- `randomforest_param`: Random Forest model parameters
+Set `PROMET_HOME` to store the file somewhere else. The EGNN parameters are small (0.6 MB) and ship with the package (`src/promet/params/promet_egnn.pt`).
 
-## Quick Start
+> The RF file is a pickled `imblearn` model. Loading it requires the exact `scikit-learn==1.4.2` and `imbalanced-learn==0.12.3` pinned in `environment.yml`.
 
-### Basic Usage with CLI
+## Usage
 
 ```bash
-# Training with default config
-python scripts/run.py
-
-# Training with custom config
-python scripts/run.py --config config.yaml
-
-# Prediction mode
-python scripts/run.py predict --ckpt_path ./checkpoints/model.ckpt
+promet predict examples/6wi8.pdb -o results/
 ```
 
-### Using the Pipeline in Python
+```
+6wi8: 7 sites | grids 13748 -> 276 after RF | 1.0s feat, 6.7s RF, 0.1s EGNN
+  note: 8 metal ion(s) in the input were removed before prediction
+  site  1  ZN  p=0.989  (5.47, 8.86, -4.07)
+  site  2  ZN  p=0.985  (4.16, 56.47, 15.81)
+  ...
+```
+
+The input can be one or more PDB files, a directory of `.pdb` files, or a `.txt` file listing PDB paths. The RF and EGNN models are loaded once and reused for every input.
+
+| option | default | description |
+|---|---|---|
+| `-o, --output` | `promet_output` | output directory |
+| `-t, --threshold` | `0.5` | grid probability cutoff applied before clustering. Lower values give more sites (higher recall); higher values give fewer, more confident sites. |
+| `--rf-threshold` | `0.5` | RF pruning threshold. The paper found 0.4–0.7 to be stable. |
+| `--rf-model` | `$PROMET_HOME/promet_rf.joblib` | path to the RF parameters |
+| `--device` | `cuda` if available | e.g. `cpu`, `cuda:1` |
+| `--n-jobs` | `-1` | CPU threads used by the RF |
+| `--save-grids` | off | also write grid-level predictions |
+
+### Outputs
+
+For each input `<name>.pdb`, PrOMet writes these files:
+
+- `<name>_sites.csv` has one row per predicted site, sorted by probability:
+
+  ```
+  site,metal,probability,x,y,z,n_grids,p_MG,p_ZN,p_MN,p_CA,p_FE,p_NI,p_CO,p_CU,p_K,p_NA
+  1,ZN,0.9890,5.474,8.860,-4.073,5,0.0002,0.9960,0.0006,0.0000,0.0012,...
+  ```
+
+  - `probability` is the highest grid probability in the cluster.
+  - `x, y, z` is the probability-weighted mean position of the cluster.
+  - `metal` and `p_*` are the metal-type distribution of the cluster's highest-probability grid point.
+- `<name>_sites.pdb` contains the predicted sites as HETATM records in chain `Z`, with the site probability in the B-factor column. Load it together with the input structure (e.g. in PyMOL) to view the sites.
+- `<name>_grids.npz` is written only with `--save-grids`. It holds the RF-retained grid points (`grid_positions`), their RF and EGNN probabilities (`rf_probs`, `grid_probs`) and their metal-type distributions (`grid_type_probs`). Use it to re-cluster at other thresholds.
+
+### Python API
 
 ```python
-from ligmet.pipeline import LigMetPipeline
-from ligmet.dataset import LigMetDataset
+from promet import PrOMet
 
-# Initialize dataset
-dataset = LigMetDataset(data_path="./dataset")
-
-# Create pipeline
-pipeline = LigMetPipeline(model_type="dl")  # or "randomforest"
-
-# Make predictions
-predictions = pipeline.predict(dataset)
+model = PrOMet(device="cuda")            # loads RF + EGNN once
+pred = model.predict("examples/6wi8.pdb", threshold=0.5)
+for site in pred.sites:
+    print(site.metal, round(site.probability, 3), site.position)
 ```
 
-### Using Pre-trained Models
+### Notes on the input
 
-```python
-from ligmet.pl import LigMetTestModule
-import torch
+- Only the first model is used. Hydrogens and waters are ignored.
+- **Metal ions already in the input are removed before prediction.** They are reported as `input_metals`, so existing sites are predicted rather than copied. All other HETATM residues (ligands, cofactors, nucleic acids) are kept as context.
+- Structures with more than 50,000 heavy atoms are skipped.
+- Runtime depends mostly on feature computation and the RF. A 3,000-atom protein takes about 10 s on 8 CPU cores. Large complexes take longer; the RF scales with the number of surface grid points. Loading the RF takes a few seconds and about 3 GB of RAM.
 
-# Load deep learning model
-model = LigMetTestModule.load_from_checkpoint("./param/dl.ckpt")
-model.eval()
+## Training
 
-# Load random forest model
-import joblib
-rf_model = joblib.load("./param/randomforest_param")
-```
-
-## Project Structure
-
-```
-LigMet/
-├── code/
-│   ├── src/ligmet/
-│   │   ├── models.py           # Model architectures
-│   │   ├── dataset.py          # Dataset classes
-│   │   ├── featurizer.py       # Feature engineering
-│   │   ├── pipeline.py         # Inference pipeline
-│   │   ├── pl.py               # PyTorch Lightning modules
-│   │   └── utils/              # Utility functions
-│   ├── scripts/
-│   │   ├── run.py              # Main training script
-│   │   ├── analyze_aligned_pdb.py
-│   │   └── benchmark/          # Benchmarking scripts
-│   ├── config.yaml             # Configuration file
-│   ├── environment.yml         # Conda environment
-│   └── pyproject.toml          # Package setup
-├── dataset/                    # Data directory
-└── figure/                     # Results and figures
-```
-
-## Configuration
-
-Configuration is managed via `config.yaml`. Key sections:
-
-```yaml
-seed_everything: 42
-
-trainer:
-  accelerator: auto              # GPU/CPU selection
-  strategy: auto                 # Distributed training strategy
-  devices: auto                  # Number of devices
-  max_epochs: 100               # Training epochs
-  precision: 32-true            # Floating point precision
-```
-
-Modify these settings before training:
+`training/` contains the code used to train the released models. `data/splits/` contains the train, validation and test splits. The splits are chronological (cut-offs 2019-01-01 and 2021-03-31), and test proteins share at most 30% sequence identity with training proteins. Per-metal test subsets are in `test_<METAL>.txt`.
 
 ```bash
-python scripts/run.py --config custom_config.yaml
+# 1. per-structure features (grids + atom features)                 -> work/features/<id>.npz
+python training/make_features.py pdbs/*.pdb -o work/features
+
+# 2. RF descriptor tables, RF training and per-structure RF probabilities
+python training/rf.py features --features_dir work/features --out_dir work/rf_features
+python training/rf.py train    --ids data/splits/train.txt --rf_features_dir work/rf_features --model work/promet_rf.joblib
+python training/rf.py predict  --ids data/splits/train.txt data/splits/validation.txt \
+                               --rf_features_dir work/rf_features --model work/promet_rf.joblib --out_dir work/rf_probs
+
+# 3. EGNN
+python training/train_egnn.py fit --config training/configs/egnn.yaml
 ```
 
-## Model Types
-
-### Deep Learning Model
-- Trained checkpoint: `param/dl.ckpt`
-- Based on PyTorch Lightning
-- Supports distributed training
-
-### Random Forest Model
-- Trained parameters: `param/randomforest_param`
-- Scikit-learn implementation
-- Good for baseline comparisons
-
-## Requirements
-
-Key dependencies:
-- `pytorch==1.11`
-- `dgl-cuda11.3==0.9.1` (Graph neural networks)
-- `e3nn==0.5` (Equivariant neural networks)
-- `rdkit==2023.9` (Molecular processing)
-- `pytorch-lightning` (Training framework)
-- `scikit-learn` (Traditional ML)
-- `freesasa` (Solvent accessibility calculations)
-
-See `environment.yml` for complete list.
-
-## Usage Examples
-
-### Example 1: Analyze PDB Files
-
-```bash
-python src/ligmet/analysis/analyze_aligned_pdb_example.py
-```
-
-### Example 2: Benchmark Performance
-
-```bash
-python scripts/benchmark/run_benchmark.py
-```
-
-### Example 3: Custom Dataset Training
-
-```python
-from ligmet.dataset import LigMetDataset
-from ligmet.pl import LigMetTestModule, LigMetTestDataModule
-from lightning.pytorch import Trainer
-
-# Prepare data
-dataset = LigMetDataset(split="train")
-datamodule = LigMetTestDataModule(dataset)
-
-# Create and train model
-model = LigMetTestModule()
-trainer = Trainer(max_epochs=100)
-trainer.fit(model, datamodule)
-```
-
-## GPU Support
-
-The environment is configured for CUDA 11.3. For different CUDA versions:
-
-```bash
-# CUDA 12.x
-conda install pytorch::pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
-conda install dgl-cuda12 -c dglteam
-```
-
-## Troubleshooting
-
-**CUDA Out of Memory**: Reduce batch size in config or use `strategy: ddp`
-
-**Import Errors**: Ensure package is installed with `pip install -e .`
-
-**Missing `param` folder**: Download using Hugging Face Hub (see Installation Step 4)
+The input structures are BioLiP entries from the PDB. Metal labels come from the metal ions in each structure; see the paper for the curation of biologically relevant sites. A trained checkpoint can be converted to the inference format (`{"model_config": ..., "state_dict": ...}`) by removing the `model.` prefix from the Lightning `state_dict` keys.
 
 ## Citation
 
-If you use LigMet, please cite:
+If you use PrOMet, please cite:
 
-```bibtex
-@software{ligmet2024,
-  author = {MOMIL},
-  title = {LigMet: Ligand-Protein Binding Prediction},
-  year = {2024},
-  url = {https://github.com/momil/LigMet}
-}
+```
+G. Park, C. Seok, H. Park. PrOMet: Accurate and Robust Metal-binding Site and Type Prediction. (under review)
 ```
 
-## Model Repository
+## Contact
 
-Pre-trained models are available at: https://huggingface.co/momil/PrOMet
-
-## License
-
-[Add your license here]
-
-## Support
-
-For issues, questions, or contributions, please open an issue on the GitHub repository.
+Gangeun Park (gangeun@snu.ac.kr). Please open an issue for bugs or questions.
